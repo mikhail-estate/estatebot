@@ -1,5 +1,5 @@
 import logging
-import os  # Импортируем модуль os
+import os
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
@@ -13,11 +13,18 @@ from telegram.ext import (
 # Включаем логирование
 logging.basicConfig(level=logging.INFO)
 
+# Получаем значения из переменных окружения
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+
+# Проверка наличия переменных окружения
+if not BOT_TOKEN:
+    raise ValueError("Переменная окружения BOT_TOKEN не установлена!")
+if not ADMIN_CHAT_ID:
+    raise ValueError("Переменная окружения ADMIN_CHAT_ID не установлена!")
+
 # Этапы
 NAME, AREA, GOAL, MORTGAGE, PHONE = range(5)
-
-# Твой Telegram chat_id
-ADMIN_CHAT_ID = 992184941
 
 # Старт
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -53,7 +60,7 @@ async def get_mortgage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return PHONE
 
-# Телефон + отправка PDF + отправка администратору
+# Телефон + отправка PDF + отправка админу
 async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.contact:
         phone = update.message.contact.phone_number
@@ -68,7 +75,7 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.error(f"Ошибка при отправке PDF: {e}")
             await update.message.reply_text(f"❌ Не удалось отправить файл. Ошибка: {e}")
 
-        # Отправка тебе анкеты
+        # Отправка анкеты админу
         message = (
             "📩 *Новая заявка:*\n"
             f"👤 Имя: {context.user_data['name']}\n"
@@ -77,7 +84,7 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 Ипотека: {context.user_data['mortgage']}\n"
             f"📞 Телефон: {context.user_data['phone']}"
         )
-        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=message, parse_mode="Markdown")
+        await context.bot.send_message(chat_id=int(ADMIN_CHAT_ID), text=message, parse_mode="Markdown")
 
         return ConversationHandler.END
     else:
@@ -86,14 +93,14 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
         phone_btn = KeyboardButton("📞 Отправить номер", request_contact=True)
         markup = ReplyKeyboardMarkup([[phone_btn]], resize_keyboard=True, one_time_keyboard=True)
         await update.message.reply_text(
-            "📲 Пожалуйста, нажми кнопку «Отправить номер», чтобы поделиться номером телефона.\n\n✍️ Ввод вручную не принимается.",
+            "📲 Пожалуйста, нажми кнопку «Отправить номер», чтобы поделиться номером телефона.",
             reply_markup=markup
         )
         return PHONE
 
 # Главная функция
 def main():
-    app = ApplicationBuilder().token("7318408114:AAFz7ZrQN6GuT0WJcCMplTvqVL2PLISTrn8").build()  # Указываем токен напрямую
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
