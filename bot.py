@@ -10,7 +10,6 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler
 )
-import httpx
 
 # Настройка логов
 logging.basicConfig(
@@ -24,9 +23,12 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 NAME, AREA, GOAL, MORTGAGE, PHONE = range(5)
 
-# Обработчики команд (остаются без изменений)
+# --- Обработчики команд ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Привет! Я помогу получить чек-лист для приёмки квартиры.\n\nКак вас зовут?")
+    await update.message.reply_text(
+        "👋 Привет! Я помогу получить чек-лист для приёмки квартиры.\n\n"
+        "Как вас зовут? (Только имя)"
+    )
     return NAME
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -64,45 +66,63 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['phone'] = update.message.contact.phone_number
         try:
             with open("checklist.pdf", "rb") as file:
-                await update.message.reply_document(file)
+                await update.message.reply_document(
+                    document=file,
+                    caption="✅ Вот ваш чек-лист! Проверьте перед приёмкой."
+                )
         except Exception as e:
-            logger.error(f"Ошибка PDF: {e}")
+            logger.error(f"Ошибка отправки PDF: {e}")
+            await update.message.reply_text("⚠️ Чек-лист временно недоступен. Попробуйте позже!")
+        
+        admin_msg = (
+            "📋 Новая заявка:\n"
+            f"👤 Имя: {context.user_data['name']}\n"
+            f"📞 Телефон: {context.user_data['phone']}\n"
+            f"📍 Район: {context.user_data['area']}\n"
+            f"🎯 Цель: {context.user_data['goal']}\n"
+            f"🏦 Ипотека: {context.user_data['mortgage']}"
+        )
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=admin_msg
+        )
         return ConversationHandler.END
+    
     else:
-        await update.message.reply_text("Пожалуйста, используйте кнопку для отправки номера")
+        await update.message.reply_text(
+            "❌ Нужно отправить номер через кнопку!\n\n"
+            "Нажмите «📞 Отправить номер» ниже:",
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("📞 Отправить номер", request_contact=True)]],
+                resize_keyboard=True
+            )
+        )
         return PHONE
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Диалог прерван. Начните заново: /start")
+    await update.message.reply_text("🚫 Диалог прерван. Начните заново: /start")
     return ConversationHandler.END
 
-# Решение для Render без aiohttp (используем httpx)
-async def health_check():
+# --- Решение для Render ---
+async def run_server():
     """Минимальный HTTP-сервер для Render"""
-    async def app(scope, receive, send):
-        if scope['path'] == '/health':
-            await send({
-                'type': 'http.response.start',
-                'status': 200,
-                'headers': [[b'content-type', b'text/plain']]
-            })
-            await send({
-                'type': 'http.response.body',
-                'body': b'OK'
-            })
+    async def handle(request):
+        return web.Response(text="OK")
+
+    app = web.Application()
+    app.router.add_get('/health', handle)
     
     port = int(os.getenv("PORT", 8080))
-    server = await asyncio.start_server(
-        app,
-        host='0.0.0.0',
-        port=port
-    )
-    logger.info(f"HTTP-сервер запущен на порту {port}")
-    return server
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logger.info(f"Сервер запущен на порту {port}")
+    return runner
 
 async def run_bot():
-    # Запускаем health-check
-    server = await health_check()
+    # Запускаем сервер для Render
+    server = await run_server()
     
     # Инициализация бота
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -122,22 +142,29 @@ async def run_bot():
     
     app.add_handler(conv_handler)
     
-    # Запуск
+    # Запуск с защитой от конфликтов
     await app.initialize()
     await app.start()
-    await app.updater.start_polling(drop_pending_updates=True)
+    await app.updater.start_polling(
+        drop_pending_updates=True,
+        timeout=30,
+        allowed_updates=Update.ALL_TYPES
+    )
     
-    logger.info("Бот запущен")
+    logger.info("Бот запущен и готов к работе")
     
+    # Бесконечный цикл
     try:
         while True:
             await asyncio.sleep(3600)
+    except asyncio.CancelledError:
+        pass
     finally:
         await app.stop()
-        server.close()
+        await server.cleanup()
 
 if __name__ == '__main__':
     try:
         asyncio.run(run_bot())
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"Фатальная ошибка: {e}")
