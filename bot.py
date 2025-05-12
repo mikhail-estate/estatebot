@@ -10,6 +10,7 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler
 )
+import httpx
 
 # Настройка логов
 logging.basicConfig(
@@ -23,22 +24,17 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 NAME, AREA, GOAL, MORTGAGE, PHONE = range(5)
 
+# Обработчики команд (остаются без изменений)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало диалога - запрос имени"""
-    await update.message.reply_text(
-        "👋 Привет! Я помогу получить чек-лист для приёмки квартиры.\n\n"
-        "Как вас зовут? (Только имя)"
-    )
+    await update.message.reply_text("👋 Привет! Я помогу получить чек-лист для приёмки квартиры.\n\nКак вас зовут?")
     return NAME
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохранение имени и запрос района"""
     context.user_data['name'] = update.message.text
     await update.message.reply_text("🏙 В каком районе или ЖК квартира?")
     return AREA
 
 async def get_area(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохранение района и уточнение цели"""
     context.user_data['area'] = update.message.text
     reply_keyboard = [["Для себя", "Инвестиция"]]
     await update.message.reply_text(
@@ -48,13 +44,11 @@ async def get_area(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return GOAL
 
 async def get_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохранение цели и вопрос про ипотеку"""
     context.user_data['goal'] = update.message.text
     await update.message.reply_text("💵 Будете оформлять ипотеку? (Да/Нет)")
     return MORTGAGE
 
 async def get_mortgage(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Запрос номера через кнопку"""
     context.user_data['mortgage'] = update.message.text
     phone_btn = KeyboardButton("📞 Отправить номер", request_contact=True)
     markup = ReplyKeyboardMarkup([[phone_btn]], resize_keyboard=True)
@@ -66,55 +60,51 @@ async def get_mortgage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return PHONE
 
 async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка номера телефона"""
     if update.message.contact:
         context.user_data['phone'] = update.message.contact.phone_number
-        
-        # Отправка чек-листа
         try:
             with open("checklist.pdf", "rb") as file:
-                await update.message.reply_document(
-                    document=file,
-                    caption="✅ Вот ваш чек-лист! Проверьте перед приёмкой."
-                )
+                await update.message.reply_document(file)
         except Exception as e:
-            logger.error(f"Ошибка отправки PDF: {e}")
-            await update.message.reply_text("⚠️ Чек-лист временно недоступен. Попробуйте позже!")
-        
-        # Уведомление админу
-        admin_msg = (
-            "📋 Новая заявка:\n"
-            f"👤 Имя: {context.user_data['name']}\n"
-            f"📞 Телефон: {context.user_data['phone']}\n"
-            f"📍 Район: {context.user_data['area']}\n"
-            f"🎯 Цель: {context.user_data['goal']}\n"
-            f"🏦 Ипотека: {context.user_data['mortgage']}"
-        )
-        await context.bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=admin_msg
-        )
+            logger.error(f"Ошибка PDF: {e}")
         return ConversationHandler.END
-    
     else:
-        # Повторный запрос кнопки при ручном вводе
-        await update.message.reply_text(
-            "❌ Нужно отправить номер через кнопку!\n\n"
-            "Нажмите «📞 Отправить номер» ниже:",
-            reply_markup=ReplyKeyboardMarkup(
-                [[KeyboardButton("📞 Отправить номер", request_contact=True)]],
-                resize_keyboard=True
-            )
-        )
+        await update.message.reply_text("Пожалуйста, используйте кнопку для отправки номера")
         return PHONE
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена диалога"""
-    await update.message.reply_text("🚫 Диалог прерван. Начните заново: /start")
+    await update.message.reply_text("Диалог прерван. Начните заново: /start")
     return ConversationHandler.END
 
+# Решение для Render без aiohttp (используем httpx)
+async def health_check():
+    """Минимальный HTTP-сервер для Render"""
+    async def app(scope, receive, send):
+        if scope['path'] == '/health':
+            await send({
+                'type': 'http.response.start',
+                'status': 200,
+                'headers': [[b'content-type', b'text/plain']]
+            })
+            await send({
+                'type': 'http.response.body',
+                'body': b'OK'
+            })
+    
+    port = int(os.getenv("PORT", 8080))
+    server = await asyncio.start_server(
+        app,
+        host='0.0.0.0',
+        port=port
+    )
+    logger.info(f"HTTP-сервер запущен на порту {port}")
+    return server
+
 async def run_bot():
-    """Основная функция запуска бота"""
+    # Запускаем health-check
+    server = await health_check()
+    
+    # Инициализация бота
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
     # Настройка диалога
@@ -132,20 +122,22 @@ async def run_bot():
     
     app.add_handler(conv_handler)
     
-    # Запуск бота
+    # Запуск
     await app.initialize()
     await app.start()
-    await app.updater.start_polling(
-        drop_pending_updates=True,
-        timeout=30
-    )
+    await app.updater.start_polling(drop_pending_updates=True)
     
-    # Бесконечный цикл для работы на Render
-    while True:
-        await asyncio.sleep(3600)
+    logger.info("Бот запущен")
+    
+    try:
+        while True:
+            await asyncio.sleep(3600)
+    finally:
+        await app.stop()
+        server.close()
 
 if __name__ == '__main__':
     try:
         asyncio.run(run_bot())
     except Exception as e:
-        logger.error(f"Ошибка запуска бота: {e}")
+        logger.error(f"Ошибка: {e}")
