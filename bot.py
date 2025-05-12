@@ -24,10 +24,7 @@ ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 NAME, AREA, GOAL, MORTGAGE, PHONE = range(5)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Привет! Я помогу получить чек-лист для приёмки квартиры.\n\n"
-        "Как вас зовут? (Только имя)"
-    )
+    await update.message.reply_text("👋 Привет! Я помогу получить чек-лист для приёмки квартиры.\n\nКак вас зовут?")
     return NAME
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -56,55 +53,38 @@ async def get_mortgage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📱 Для получения чек-листа нам нужен ваш номер телефона.\n\n"
         "❗ Обязательно нажмите кнопку ниже — ручной ввод не принимается!",
-        reply_markup=markup,
-        parse_mode="Markdown"
+        reply_markup=markup
     )
     return PHONE
 
 async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.contact:
         context.user_data['phone'] = update.message.contact.phone_number
-        
         try:
             with open("checklist.pdf", "rb") as file:
-                await update.message.reply_document(
-                    document=file,
-                    caption="✅ Вот ваш чек-лист! Проверьте перед приёмкой."
-                )
+                await update.message.reply_document(file)
         except Exception as e:
             logger.error(f"Ошибка отправки PDF: {e}")
-            await update.message.reply_text("⚠️ Чек-лист временно недоступен. Попробуйте позже!")
-        
-        admin_msg = (
-            "📋 Новая заявка:\n"
-            f"👤 Имя: {context.user_data['name']}\n"
-            f"📞 Телефон: {context.user_data['phone']}\n"
-            f"📍 Район: {context.user_data['area']}\n"
-            f"🎯 Цель: {context.user_data['goal']}\n"
-            f"🏦 Ипотека: {context.user_data['mortgage']}"
-        )
-        await context.bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=admin_msg
-        )
         return ConversationHandler.END
     else:
-        await update.message.reply_text(
-            "❌ Нужно отправить номер через кнопку!\n\n"
-            "Нажмите «📞 Отправить номер» ниже:",
-            reply_markup=ReplyKeyboardMarkup(
-                [[KeyboardButton("📞 Отправить номер", request_contact=True)]],
-                resize_keyboard=True
-            ),
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("Пожалуйста, используйте кнопку для отправки номера")
         return PHONE
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🚫 Диалог прерван. Начните заново: /start")
+    await update.message.reply_text("Диалог прерван. Начните заново: /start")
     return ConversationHandler.END
 
-async def run_bot():
+async def run_server():
+    """Фейковый сервер для Render"""
+    server = await asyncio.start_server(
+        lambda r, w: None,
+        host='0.0.0.0',
+        port=int(os.getenv("PORT", 8080))
+    )
+    async with server:
+        await server.serve_forever()
+
+async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
     conv_handler = ConversationHandler(
@@ -123,21 +103,24 @@ async def run_bot():
     
     await app.initialize()
     await app.start()
-    await app.updater.start_polling(
-        drop_pending_updates=True,
-        timeout=20,
-        allowed_updates=Update.ALL_TYPES
-    )
     
-    # Для работы на Render
-    server = await asyncio.start_server(
-        lambda: None,
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", 8080))
-    )
+    # Запускаем поллинг с обработкой конфликтов
+    try:
+        await app.updater.start_polling(
+            drop_pending_updates=True,
+            timeout=30,
+            allowed_updates=Update.ALL_TYPES
+        )
+    except Exception as e:
+        logger.error(f"Polling error: {e}")
+        await app.stop()
+        raise
     
-    while True:
-        await asyncio.sleep(3600)
+    # Запускаем фейковый сервер
+    await run_server()
 
 if __name__ == '__main__':
-    asyncio.run(run_bot())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
