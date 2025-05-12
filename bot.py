@@ -1,5 +1,6 @@
 import logging
 import os
+import asyncio
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
@@ -22,9 +23,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 NAME, AREA, GOAL, MORTGAGE, PHONE = range(5)
 
-# --- Обработчики ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало диалога."""
     await update.message.reply_text(
         "👋 Привет! Я помогу получить чек-лист для приёмки квартиры.\n\n"
         "Как вас зовут? (Только имя)"
@@ -32,13 +31,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return NAME
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохраняем имя и спрашиваем район."""
     context.user_data['name'] = update.message.text
     await update.message.reply_text("🏙 В каком районе или ЖК квартира?")
     return AREA
 
 async def get_area(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохраняем район и уточняем цель покупки."""
     context.user_data['area'] = update.message.text
     reply_keyboard = [["Для себя", "Инвестиция"]]
     await update.message.reply_text(
@@ -48,34 +45,26 @@ async def get_area(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return GOAL
 
 async def get_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохраняем цель и спрашиваем про ипотеку."""
     context.user_data['goal'] = update.message.text
     await update.message.reply_text("💵 Будете оформлять ипотеку? (Да/Нет)")
     return MORTGAGE
 
 async def get_mortgage(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохраняем данные об ипотеке и запрашиваем номер ЧЕРЕЗ КНОПКУ."""
     context.user_data['mortgage'] = update.message.text
-    
-    # Жёсткое требование кнопки (без ручного ввода)
     phone_btn = KeyboardButton("📞 Отправить номер", request_contact=True)
     markup = ReplyKeyboardMarkup([[phone_btn]], resize_keyboard=True)
-    
     await update.message.reply_text(
-        "📱 Для отправки чек-листа нам нужен ваш номер.\n\n"
-        "❗ **Обязательно нажмите кнопку ниже** — ручной ввод не принимается!",
+        "📱 Для получения чек-листа нам нужен ваш номер телефона.\n\n"
+        "❗ Обязательно нажмите кнопку ниже — ручной ввод не принимается!",
         reply_markup=markup,
         parse_mode="Markdown"
     )
     return PHONE
 
 async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатываем номер ТОЛЬКО через кнопку, иначе переспрашиваем."""
     if update.message.contact:
-        # Успех: сохраняем номер
         context.user_data['phone'] = update.message.contact.phone_number
         
-        # Отправляем чек-лист
         try:
             with open("checklist.pdf", "rb") as file:
                 await update.message.reply_document(
@@ -83,30 +72,25 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     caption="✅ Вот ваш чек-лист! Проверьте перед приёмкой."
                 )
         except Exception as e:
-            logger.error(f"Ошибка PDF: {e}")
-            await update.message.reply_text("⚠️ Файл временно недоступен. Попробуйте позже!")
+            logger.error(f"Ошибка отправки PDF: {e}")
+            await update.message.reply_text("⚠️ Чек-лист временно недоступен. Попробуйте позже!")
         
-        # Уведомление админу
         admin_msg = (
-            "📋 *Новая заявка:*\n"
+            "📋 Новая заявка:\n"
             f"👤 Имя: {context.user_data['name']}\n"
-            f"📞 Телефон: `{context.user_data['phone']}`\n"
+            f"📞 Телефон: {context.user_data['phone']}\n"
             f"📍 Район: {context.user_data['area']}\n"
             f"🎯 Цель: {context.user_data['goal']}\n"
             f"🏦 Ипотека: {context.user_data['mortgage']}"
         )
         await context.bot.send_message(
             chat_id=ADMIN_CHAT_ID,
-            text=admin_msg,
-            parse_mode="Markdown"
+            text=admin_msg
         )
-        
         return ConversationHandler.END
-    
     else:
-        # Если ввели вручную — повторяем запрос
         await update.message.reply_text(
-            "❌ *Нужно отправить номер через кнопку!*\n\n"
+            "❌ Нужно отправить номер через кнопку!\n\n"
             "Нажмите «📞 Отправить номер» ниже:",
             reply_markup=ReplyKeyboardMarkup(
                 [[KeyboardButton("📞 Отправить номер", request_contact=True)]],
@@ -114,15 +98,13 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ),
             parse_mode="Markdown"
         )
-        return PHONE  # Остаёмся в этом же состоянии
+        return PHONE
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена диалога."""
     await update.message.reply_text("🚫 Диалог прерван. Начните заново: /start")
     return ConversationHandler.END
 
-# --- Запуск ---
-def main():
+async def run_bot():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
     conv_handler = ConversationHandler(
@@ -132,16 +114,30 @@ def main():
             AREA: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_area)],
             GOAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_goal)],
             MORTGAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mortgage)],
-            PHONE: [
-                MessageHandler(filters.CONTACT, get_phone),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)  # Ловим ручной ввод
-            ],
+            PHONE: [MessageHandler(filters.CONTACT | filters.TEXT, get_phone)],
         },
         fallbacks=[CommandHandler('cancel', cancel)],
     )
     
     app.add_handler(conv_handler)
-    app.run_polling(drop_pending_updates=True)
+    
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(
+        drop_pending_updates=True,
+        timeout=20,
+        allowed_updates=Update.ALL_TYPES
+    )
+    
+    # Для работы на Render
+    server = await asyncio.start_server(
+        lambda: None,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 8080))
+    )
+    
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(run_bot())
