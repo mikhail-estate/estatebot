@@ -16,12 +16,16 @@ logging.basicConfig(level=logging.INFO)
 # Получаем значения из переменных окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
+PORT = int(os.environ.get("PORT", 8443))  # Default для Render
 
-# Проверка наличия переменных окружения
+# Проверка переменных
 if not BOT_TOKEN:
     raise ValueError("Переменная окружения BOT_TOKEN не установлена!")
 if not ADMIN_CHAT_ID:
     raise ValueError("Переменная окружения ADMIN_CHAT_ID не установлена!")
+if not RENDER_EXTERNAL_HOSTNAME:
+    raise ValueError("Переменная окружения RENDER_EXTERNAL_HOSTNAME не установлена!")
 
 # Этапы
 NAME, AREA, GOAL, MORTGAGE, PHONE = range(5)
@@ -60,13 +64,13 @@ async def get_mortgage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return PHONE
 
-# Телефон + отправка PDF + отправка админу
+# Телефон
 async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.contact:
         phone = update.message.contact.phone_number
         context.user_data["phone"] = phone
 
-        # Отправка PDF пользователю
+        # Отправка PDF
         await update.message.reply_text("✅ Спасибо! Вот твой чек-лист по приёмке квартиры.")
         try:
             with open("checklist.pdf", "rb") as pdf_file:
@@ -85,18 +89,17 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📞 Телефон: {context.user_data['phone']}"
         )
         await context.bot.send_message(chat_id=int(ADMIN_CHAT_ID), text=message, parse_mode="Markdown")
-
         return ConversationHandler.END
-    else:
-        # Если пользователь не отправил контакт, а ввёл вручную
-        await update.message.reply_text("❗ Пожалуйста, не вводи номер вручную. Нажми кнопку «Отправить номер».")
-        phone_btn = KeyboardButton("📞 Отправить номер", request_contact=True)
-        markup = ReplyKeyboardMarkup([[phone_btn]], resize_keyboard=True, one_time_keyboard=True)
-        await update.message.reply_text(
-            "📲 Пожалуйста, нажми кнопку «Отправить номер», чтобы поделиться номером телефона.",
-            reply_markup=markup
-        )
-        return PHONE
+
+    # Введён вручную
+    await update.message.reply_text("❗ Пожалуйста, не вводи номер вручную. Нажми кнопку «Отправить номер».")
+    phone_btn = KeyboardButton("📞 Отправить номер", request_contact=True)
+    markup = ReplyKeyboardMarkup([[phone_btn]], resize_keyboard=True, one_time_keyboard=True)
+    await update.message.reply_text(
+        "📲 Пожалуйста, нажми кнопку «Отправить номер», чтобы поделиться номером телефона.",
+        reply_markup=markup
+    )
+    return PHONE
 
 # Главная функция
 def main():
@@ -118,7 +121,13 @@ def main():
     )
 
     app.add_handler(conv_handler)
-    app.run_polling()
+
+    # Используем Webhook
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url=f"https://{RENDER_EXTERNAL_HOSTNAME}/webhook"
+    )
 
 if __name__ == "__main__":
     main()
