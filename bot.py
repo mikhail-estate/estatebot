@@ -74,17 +74,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Диалог прерван. Начните заново: /start")
     return ConversationHandler.END
 
-async def run_server():
-    """Фейковый сервер для Render"""
-    server = await asyncio.start_server(
-        lambda r, w: None,
-        host='0.0.0.0',
-        port=int(os.getenv("PORT", 8080))
-    )
-    async with server:
-        await server.serve_forever()
-
-async def main():
+async def run_bot():
+    # Создаем новую сессию для избежания конфликтов
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
     conv_handler = ConversationHandler(
@@ -101,26 +92,25 @@ async def main():
     
     app.add_handler(conv_handler)
     
+    # Останавливаем любые предыдущие экземпляры
+    await app.updater.stop()
+    await app.stop()
+    
+    # Запускаем новый экземпляр
     await app.initialize()
     await app.start()
+    await app.updater.start_polling(
+        drop_pending_updates=True,
+        timeout=30,
+        allowed_updates=Update.ALL_TYPES
+    )
     
-    # Запускаем поллинг с обработкой конфликтов
-    try:
-        await app.updater.start_polling(
-            drop_pending_updates=True,
-            timeout=30,
-            allowed_updates=Update.ALL_TYPES
-        )
-    except Exception as e:
-        logger.error(f"Polling error: {e}")
-        await app.stop()
-        raise
-    
-    # Запускаем фейковый сервер
-    await run_server()
+    # Бесконечный цикл для работы на Render
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == '__main__':
     try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+        asyncio.run(run_bot())
+    except Exception as e:
+        logger.error(f"Ошибка запуска бота: {e}")
