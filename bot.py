@@ -10,98 +10,117 @@ from telegram.ext import (
     ConversationHandler
 )
 
-# Включаем логирование
-logging.basicConfig(level=logging.INFO)
+# Настройка логов
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# Получаем значения из переменных окружения
+# Константы
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-
-# Проверка наличия переменных окружения
-if not BOT_TOKEN:
-    raise ValueError("Переменная окружения BOT_TOKEN не установлена!")
-if not ADMIN_CHAT_ID:
-    raise ValueError("Переменная окружения ADMIN_CHAT_ID не установлена!")
-
-# Этапы
 NAME, AREA, GOAL, MORTGAGE, PHONE = range(5)
 
-# Старт
+# --- Обработчики ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Привет! Я помогу тебе получить чек-лист по приёмке квартиры.\n\nКак тебя зовут?")
+    """Начало диалога, запрос имени."""
+    await update.message.reply_text(
+        "👋 Привет! Я помогу тебе получить чек-лист по приёмке квартиры.\n\n"
+        "Как тебя зовут? (Только имя, без фамилии)"
+    )
     return NAME
 
-# Имя
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохранение имени и запрос района."""
     context.user_data["name"] = update.message.text
     await update.message.reply_text("🗺️ В каком районе или ЖК ты покупаешь квартиру?")
     return AREA
 
-# Район
 async def get_area(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохранение района и уточнение цели."""
     context.user_data["area"] = update.message.text
-    await update.message.reply_text("🏠 Покупаешь для себя или под инвестиции?")
+    reply_keyboard = [["Для себя", "Инвестиция"]]
+    await update.message.reply_text(
+        "🏠 Покупаешь для себя или под инвестиции?",
+        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+    )
     return GOAL
 
-# Цель
 async def get_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохранение цели и вопрос про ипотеку."""
     context.user_data["goal"] = update.message.text
-    await update.message.reply_text("💸 Есть ли ипотека?")
+    await update.message.reply_text("💸 Есть ли ипотека? (Да/Нет)")
     return MORTGAGE
 
-# Ипотека
 async def get_mortgage(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохранение данных об ипотеке и запрос номера через кнопку."""
     context.user_data["mortgage"] = update.message.text
+    
+    # Жёсткое требование: только кнопка "Отправить номер"
     phone_btn = KeyboardButton("📞 Отправить номер", request_contact=True)
     markup = ReplyKeyboardMarkup([[phone_btn]], resize_keyboard=True, one_time_keyboard=True)
+    
     await update.message.reply_text(
-        "📲 Пожалуйста, нажми кнопку «Отправить номер», чтобы поделиться номером телефона.\n\n✍️ Ввод вручную не принимается.",
-        reply_markup=markup
+        "📲 Для получения чек-листа нам нужен ваш номер телефона.\n\n"
+        "❗ **Обязательно нажмите кнопку ниже** — ручной ввод не принимается!",
+        reply_markup=markup,
+        parse_mode="Markdown"
     )
     return PHONE
 
-# Телефон + отправка PDF + отправка админу
 async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.contact:
-        phone = update.message.contact.phone_number
-        context.user_data["phone"] = phone
-
-        # Отправка PDF пользователю
-        await update.message.reply_text("✅ Спасибо! Вот твой чек-лист по приёмке квартиры.")
-        try:
-            with open("checklist.pdf", "rb") as pdf_file:
-                await update.message.reply_document(document=pdf_file)
-        except Exception as e:
-            logging.error(f"Ошибка при отправке PDF: {e}")
-            await update.message.reply_text(f"❌ Не удалось отправить файл. Ошибка: {e}")
-
-        # Отправка анкеты админу
-        message = (
-            "📩 *Новая заявка:*\n"
-            f"👤 Имя: {context.user_data['name']}\n"
-            f"📍 Район/ЖК: {context.user_data['area']}\n"
-            f"🎯 Цель: {context.user_data['goal']}\n"
-            f"💰 Ипотека: {context.user_data['mortgage']}\n"
-            f"📞 Телефон: {context.user_data['phone']}"
-        )
-        await context.bot.send_message(chat_id=int(ADMIN_CHAT_ID), text=message, parse_mode="Markdown")
-
-        return ConversationHandler.END
-    else:
-        # Если пользователь не отправил контакт, а ввёл вручную
-        await update.message.reply_text("❗ Пожалуйста, не вводи номер вручную. Нажми кнопку «Отправить номер».")
-        phone_btn = KeyboardButton("📞 Отправить номер", request_contact=True)
-        markup = ReplyKeyboardMarkup([[phone_btn]], resize_keyboard=True, one_time_keyboard=True)
+    """Обработка номера телефона и завершение диалога."""
+    if not update.message.contact:
+        # Если пользователь попытался ввести номер вручную
         await update.message.reply_text(
-            "📲 Пожалуйста, нажми кнопку «Отправить номер», чтобы поделиться номером телефона.",
-            reply_markup=markup
+            "❌ **Нужно отправить номер через кнопку!**\n\n"
+            "Нажмите «📞 Отправить номер» ниже:",
+            parse_mode="Markdown"
         )
         return PHONE
+    
+    # Сохранение номера
+    context.user_data["phone"] = update.message.contact.phone_number
+    
+    # Отправка чек-листа
+    try:
+        with open("checklist.pdf", "rb") as file:
+            await update.message.reply_document(
+                document=file,
+                caption="✅ Вот ваш чек-лист для приёмки квартиры!"
+            )
+    except Exception as e:
+        logger.error(f"Ошибка отправки PDF: {e}")
+        await update.message.reply_text("⚠️ Чек-лист временно недоступен. Попробуйте позже!")
+    
+    # Уведомление админа
+    admin_message = (
+        "📋 *Новая заявка на чек-лист:*\n"
+        f"👤 *Имя:* {context.user_data['name']}\n"
+        f"📞 *Телефон:* `{context.user_data['phone']}`\n"
+        f"📍 *Район:* {context.user_data['area']}\n"
+        f"🎯 *Цель:* {context.user_data['goal']}\n"
+        f"🏦 *Ипотека:* {context.user_data['mortgage']}"
+    )
+    await context.bot.send_message(
+        chat_id=ADMIN_CHAT_ID,
+        text=admin_message,
+        parse_mode="Markdown"
+    )
+    
+    await update.message.reply_text("Спасибо за обращение! Если остались вопросы — напишите нам.")
+    return ConversationHandler.END
 
-# Главная функция
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена диалога."""
+    await update.message.reply_text("❌ Диалог прерван. Начните заново командой /start.")
+    return ConversationHandler.END
+
+# --- Запуск ---
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
+    
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -111,14 +130,16 @@ def main():
             MORTGAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mortgage)],
             PHONE: [
                 MessageHandler(filters.CONTACT, get_phone),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)
+                # Блокируем любой текстовый ввод кроме команды /cancel
+                MessageHandler(filters.TEXT & ~filters.COMMAND, 
+                              lambda u, c: get_phone(u, c) if u.message.contact else None)
             ],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
-
+    
     app.add_handler(conv_handler)
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
