@@ -23,6 +23,9 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 NAME, AREA, GOAL, MORTGAGE, PHONE = range(5)
 
+if not BOT_TOKEN or not ADMIN_CHAT_ID:
+    raise ValueError("❌ Не задан BOT_TOKEN или ADMIN_CHAT_ID в переменных окружения.")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало диалога - запрос имени"""
     await update.message.reply_text(
@@ -64,7 +67,7 @@ async def get_mortgage(update: Update, context: ContextTypes.DEFAULT_TYPE):
     markup = ReplyKeyboardMarkup(
         [[phone_btn]],
         resize_keyboard=True,
-        is_persistent=True  # Ключевое изменение для версии 22.0!
+        is_persistent=True
     )
     await update.message.reply_text(
         "📱 Для получения чек-листа нам нужен ваш номер телефона.\n\n"
@@ -77,7 +80,7 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка номера с постоянной кнопкой"""
     if update.message.contact:
         context.user_data['phone'] = update.message.contact.phone_number
-        
+
         try:
             with open("checklist.pdf", "rb") as file:
                 await update.message.reply_document(
@@ -87,7 +90,12 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Ошибка отправки PDF: {e}")
             await update.message.reply_text("⚠️ Чек-лист временно недоступен. Попробуйте позже!")
-        
+
+        await update.message.reply_text(
+            "Спасибо! Если есть вопросы, напишите в чат.",
+            reply_markup=ReplyKeyboardMarkup.remove()
+        )
+
         admin_msg = (
             "📋 Новая заявка:\n"
             f"👤 Имя: {context.user_data['name']}\n"
@@ -101,13 +109,13 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=admin_msg
         )
         return ConversationHandler.END
-    
+
     else:
         phone_btn = KeyboardButton("📞 Отправить номер", request_contact=True)
         markup = ReplyKeyboardMarkup(
             [[phone_btn]],
             resize_keyboard=True,
-            is_persistent=True  # Кнопка остается навсегда!
+            is_persistent=True
         )
         await update.message.reply_text(
             "❌ Нужно отправить номер через кнопку!\n\n"
@@ -125,9 +133,9 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def run_bot():
-    """Запуск бота для версии 22.0"""
+    """Запуск бота"""
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    
+
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
@@ -139,19 +147,21 @@ async def run_bot():
         },
         fallbacks=[CommandHandler('cancel', cancel)],
     )
-    
+
     app.add_handler(conv_handler)
-    
+
+    # Удаляем вебхук перед стартом polling, чтобы избежать конфликта
     await app.initialize()
+    await app.bot.delete_webhook(drop_pending_updates=True)
     await app.start()
     await app.updater.start_polling(
         drop_pending_updates=True,
         timeout=30,
         allowed_updates=Update.ALL_TYPES
     )
-    
-    logger.info("Бот версии 22.0 запущен")
-    
+
+    logger.info("🤖 Бот запущен и готов к работе")
+
     while True:
         await asyncio.sleep(3600)
 
